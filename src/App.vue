@@ -1018,8 +1018,7 @@ async function reserveSelectedSlots() {
     const remark = userForm.value.remark.trim()
 
     let overwriteCount = 0
-    let createCount = 0
-    const localLogs = []
+    const newlyCreated = []
 
     for (const slot of selectedSlotsForOperation.value) {
       const existed = activeBookings.find((item) => item.slotStart === slot.slotStart)
@@ -1029,7 +1028,7 @@ async function reserveSelectedSlots() {
         continue
       }
 
-      await api.post('/bookings', {
+      const createRes = await api.post('/bookings', {
         date: selectedDate.value,
         instrumentId: selectedInstrumentId.value,
         instrumentName: selectedInstrumentName.value,
@@ -1042,28 +1041,105 @@ async function reserveSelectedSlots() {
         categoryId: selectedCategoryId.value
       })
 
-      localLogs.push({
-        id: createLogId(),
-        actionType: 'reserve',
+      newlyCreated.push({
+        slot,
+        record: createRes.data
+      })
+    }
+
+    let successCount = 0
+    let conflictCount = 0
+    const localLogs = []
+
+    for (const { slot, record } of newlyCreated) {
+      const checkParams = {
         date: selectedDate.value,
         instrumentId: selectedInstrumentId.value,
-        instrumentName: selectedInstrumentName.value,
-        slotStart: slot.slotStart,
-        slotEnd: slot.slotEnd,
-        userName: activeIdentity.value.userName,
-        employeeNo: activeIdentity.value.employeeNo,
-        remark,
-        createdAt: Date.now()
+        slotStart: slot.slotStart
+      }
+      if (selectedCategoryId.value) {
+        checkParams.categoryId = selectedCategoryId.value
+      }
+      const checkRes = await api.get('/bookings', { params: checkParams })
+      const slotBookings = (checkRes.data || []).filter((b) => b.slotStart === slot.slotStart)
+
+      if (slotBookings.length <= 1) {
+        successCount += 1
+        localLogs.push({
+          id: createLogId(),
+          actionType: 'reserve',
+          date: selectedDate.value,
+          instrumentId: selectedInstrumentId.value,
+          instrumentName: selectedInstrumentName.value,
+          slotStart: slot.slotStart,
+          slotEnd: slot.slotEnd,
+          userName: activeIdentity.value.userName,
+          employeeNo: activeIdentity.value.employeeNo,
+          remark,
+          createdAt: Date.now()
+        })
+        continue
+      }
+
+      slotBookings.sort((a, b) => {
+        const idA = Number(a.recordId || a._id || a.id || 0)
+        const idB = Number(b.recordId || b._id || b.id || 0)
+        return idA - idB
       })
 
-      createCount += 1
+      const myId = record.recordId || record._id || record.id
+      const myIndex = slotBookings.findIndex((b) => (b.recordId || b._id || b.id) === myId)
+
+      if (myIndex === 0) {
+        successCount += 1
+        localLogs.push({
+          id: createLogId(),
+          actionType: 'reserve',
+          date: selectedDate.value,
+          instrumentId: selectedInstrumentId.value,
+          instrumentName: selectedInstrumentName.value,
+          slotStart: slot.slotStart,
+          slotEnd: slot.slotEnd,
+          userName: activeIdentity.value.userName,
+          employeeNo: activeIdentity.value.employeeNo,
+          remark,
+          createdAt: Date.now()
+        })
+        for (let i = 1; i < slotBookings.length; i++) {
+          const dupId = slotBookings[i].recordId || slotBookings[i]._id || slotBookings[i].id
+          if (dupId) {
+            try {
+              await api.delete(`/bookings/${encodeURIComponent(dupId)}`)
+            } catch (e) {
+              console.warn('清理重复预约失败', e)
+            }
+          }
+        }
+      } else {
+        conflictCount += 1
+        if (myId) {
+          try {
+            await api.delete(`/bookings/${encodeURIComponent(myId)}`)
+          } catch (e) {
+            console.warn('删除冲突预约失败', e)
+          }
+        }
+      }
     }
 
     appendSubmissionLogs(localLogs)
-    successMessage.value =
-      overwriteCount > 0
-        ? `预约完成：成功 ${createCount} 个时段，跳过已占用 ${overwriteCount} 个。`
-        : `预约成功：已预约 ${createCount} 个时段。`
+
+    if (successCount > 0 && conflictCount > 0) {
+      successMessage.value = `预约完成：成功 ${successCount} 个时段，手慢了 ${conflictCount} 个时段被抢走。`
+    } else if (successCount > 0 && overwriteCount > 0) {
+      successMessage.value = `预约完成：成功 ${successCount} 个时段，跳过已占用 ${overwriteCount} 个。`
+    } else if (conflictCount > 0 && successCount === 0) {
+      errorMessage.value = `预约失败：${conflictCount} 个时段都被抢走了，再试试其他时段吧！`
+    } else if (overwriteCount > 0 && successCount === 0) {
+      errorMessage.value = `选中的 ${overwriteCount} 个时段都已被占用。`
+    } else {
+      successMessage.value = `预约成功：已预约 ${successCount} 个时段。`
+    }
 
     await loadSlots({ preserveMessages: true })
     await loadInstrumentAvailability()

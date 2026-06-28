@@ -313,6 +313,9 @@ function buildWhereConditions(params, dateField = 'booking_date') {
   if (params.instrumentId) {
     conditions.push(['instrument_id', '=', String(params.instrumentId)])
   }
+  if (params.slotStart !== undefined && params.slotStart !== '') {
+    conditions.push(['slot_start', '=', params.slotStart])
+  }
 
   return conditions
 }
