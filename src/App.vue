@@ -814,6 +814,40 @@ async function loadAdminBookingRecords() {
   })
 }
 
+async function cleanupExpiredBookings() {
+  try {
+    const res = await api.get('/bookings', { params: {} })
+    const allBookings = res.data || []
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const cutoffDate = new Date(today)
+    cutoffDate.setDate(cutoffDate.getDate() - 15)
+
+    let deletedCount = 0
+    for (const booking of allBookings) {
+      if (!booking.date) continue
+      const bookingDate = new Date(booking.date)
+      bookingDate.setHours(0, 0, 0, 0)
+      if (bookingDate < cutoffDate) {
+        const recordId = booking.recordId || booking._id
+        if (recordId) {
+          try {
+            await api.delete(`/bookings/${encodeURIComponent(recordId)}`)
+            deletedCount++
+          } catch (e) {
+            console.warn('删除过期预约失败', booking._id, e)
+          }
+        }
+      }
+    }
+    if (deletedCount > 0) {
+      console.log(`自动清理了 ${deletedCount} 条超过15天的预约记录`)
+    }
+  } catch (e) {
+    console.warn('清理过期预约失败', e)
+  }
+}
+
 async function initPage() {
   loading.value = true
   resetMessages()
@@ -823,6 +857,7 @@ async function initPage() {
     await loadCategories()
     await loadInstruments()
     loadSubmissionHistory()
+    cleanupExpiredBookings()
     await Promise.all([loadSlots(), loadInstrumentAvailability()])
   } catch (error) {
     console.error(error)
